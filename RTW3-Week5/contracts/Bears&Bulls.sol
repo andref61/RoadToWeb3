@@ -15,7 +15,7 @@ import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 // ./interfaces/KeeperCompatibleInterface.sol
 import "@chainlink/contracts/src/v0.8/KeeperCompatible.sol";
 
-contract BullsBears is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, KeeperCompatibleInterface {
+contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, KeeperCompatibleInterface {
     using Counters for Counters.Counter;
 
     uint    lastTimeStamp;
@@ -46,6 +46,7 @@ contract BullsBears is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
     {
         _safeMint(to, tokenId);
         _setTokenURI(tokenId, uri);
+        _tokenIdCounter.increment();
     }
 
     // The following functions are overrides required by Solidity.
