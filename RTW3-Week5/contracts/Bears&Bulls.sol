@@ -15,15 +15,25 @@ import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 // ./interfaces/KeeperCompatibleInterface.sol
 import "@chainlink/contracts/src/v0.8/KeeperCompatible.sol";
 
-contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, KeeperCompatibleInterface {
+import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
+import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
+
+
+contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, KeeperCompatibleInterface, VRFConsumerBaseV2  {
     using Counters for Counters.Counter;
 
-    uint    lastTimeStamp;
-    uint     interval;
+    uint   public lastTimeStamp;
+    uint   public interval;
     int256 public currentPrice;
 
-    AggregatorV3Interface public pricefeed;
+     enum MarketTrend{BULL, BEAR}
+     MarketTrend public currentMarketTrend = MarketTrend.BULL;
+    
+    AggregatorV3Interface private pricefeed;
     Counters.Counter private _tokenIdCounter;
+    Counters.Counter public _performUpkeepCount;
+
+    VRFCoordinatorV2Interface COORDINATOR;
 
     event TokensUpdated(string marketTrend);
     event TokenMinted(uint256 tokenId);
@@ -40,24 +50,57 @@ contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
         "https://ipfs.io/ipfs/QmbKhBXVWmwrYsTPFYfroR2N7NAekAMxHUVg2CWks7i9qj?filename=simple_bear.json"
     ];
 
-    constructor( uint _interval) ERC721("Bulls&Bears", "BBTK") {
+    // Rinkeby coordinator. For other networks,
+    // see https://docs.chain.link/docs/vrf-contracts/#configurations
+    address vrfCoordinator = 0x6168499c0cFfCaCD319c818142124B7A15E857ab;
+
+    // The gas lane to use, which specifies the maximum gas price to bump to.
+    // For a list of available gas lanes on each network,
+    // see https://docs.chain.link/docs/vrf-contracts/#configurations
+    bytes32 keyHash = 0xd89b2bf150e3b9e13446986e571fb9cab24b13cea0a43ea20a6049a85cc807cc;
+
+    // Depends on the number of requested values that you want sent to the
+    // fulfillRandomWords() function. Storing each word costs about 20,000 gas,
+    // so 100,000 is a safe default for this example contract. Test and adjust
+    // this limit based on the network that you select, the size of the request,
+    // and the processing of the callback request in the fulfillRandomWords()
+    // function.
+    uint32 callbackGasLimit = 500000;
+
+    // The default is 3, but you can set this higher.
+    uint16 requestConfirmations = 3;
+
+    // Cannot exceed VRFCoordinatorV2.MAX_NUM_WORDS.
+    uint32 numWords;
+
+    uint256[] public s_randomWords;
+    uint64 s_subscriptionId;
+    uint256 public s_requestId;
+
+    constructor( uint _interval, uint64 subscriptionId)  VRFConsumerBaseV2(vrfCoordinator) ERC721("Bulls&Bears", "BBTK") {
         interval = _interval;
         lastTimeStamp = block.timestamp;
 
         /**
         * Network: Rinkeby
         * Data Feed: ETH/USD
-        * Address: 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419
+        * Address: 0x8A753747A1Fa494EC906cE90E9f37563A8AF630e
         */
-        pricefeed = AggregatorV3Interface(0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419);
-    }
+        pricefeed = AggregatorV3Interface(0x8A753747A1Fa494EC906cE90E9f37563A8AF630e);
+        currentPrice = getLatestPrice();
 
+        COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
+        s_subscriptionId = subscriptionId;
+    }
+    
     function safeMint(address to) public {
         // minted token id is the counter current value
         uint256 tokenId = _tokenIdCounter.current();
 
         // increment token Id counter for next mint
         _tokenIdCounter.increment();
+        numWords = uint32(_tokenIdCounter.current()); // rendom number for each token
+
 
         // mint it
         _safeMint(to, tokenId);
@@ -69,7 +112,7 @@ contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
         emit TokenMinted((tokenId));
      }
 
-    function checkUpkeep(bytes calldata /* checkData */) external view override returns (bool upkeepNeeded, bytes memory /*performData */) {
+    function checkUpkeep(bytes calldata /*checkData*/ ) external view override returns (bool upkeepNeeded , bytes memory /*performData*/ ) {
         upkeepNeeded = (block.timestamp - lastTimeStamp) > interval;
         // We don't use the checkData in this example. The checkData is defined when the Upkeep was registered.
     }
@@ -86,15 +129,19 @@ contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
 
             if (latestPrice < currentPrice) {
                 // bear
-                updateAllTokenUris("bear");
+                currentMarketTrend = MarketTrend.BEAR;
 
             } else {
                 // bull
-                updateAllTokenUris("bull");
+               currentMarketTrend = MarketTrend.BULL;
             }
 
             // update currentPrice
             currentPrice = latestPrice;
+
+            requestRandomWordsForTrendUris();
+
+            _performUpkeepCount.increment();
         } else {
             return;
         }
@@ -111,21 +158,7 @@ contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
 
         return price; //  example price returned 3034715771688
     }
-
-    function updateAllTokenUris(string memory trend) internal {
-        if (compareStrings("bear", trend)) {
-             for (uint i = 0; i < _tokenIdCounter.current() ; i++) {
-                _setTokenURI(i, bearUrisIpfs[0]);
-            } 
-            
-        } else {     
-             for (uint i = 0; i < _tokenIdCounter.current() ; i++) {
-                _setTokenURI(i, bullUrisIpfs[0]);
-            }  
-        }   
-        emit TokensUpdated(trend);
-    }
-
+ 
     function setPriceFeed(address newFeed) public onlyOwner {
         pricefeed = AggregatorV3Interface(newFeed);
     }
@@ -133,11 +166,38 @@ contract BearsBulls is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable, Keep
         interval = newInterval;
     }
     
-
     function compareStrings(string memory a, string memory b) internal pure returns (bool) {
         return (keccak256(abi.encodePacked((a))) == keccak256(abi.encodePacked((b))));
     }
 
+    function requestRandomWordsForTrendUris() internal {
+        require(s_subscriptionId != 0, "Subscription ID not set"); 
+        require(numWords != 0, "No tokens minted");
+        s_requestId = COORDINATOR.requestRandomWords(
+            keyHash,
+            s_subscriptionId,
+            requestConfirmations,
+            callbackGasLimit,
+            numWords
+        );
+  }
+
+    function fulfillRandomWords(uint256, /* requestId */ uint256[] memory randomWords) internal override {
+        s_randomWords = randomWords;
+
+        string[] memory trendUris = currentMarketTrend == MarketTrend.BULL ? bullUrisIpfs : bearUrisIpfs;
+        uint256 idx = 0;
+
+        for (uint i = 0; i < _tokenIdCounter.current() ; i++) {
+            idx = randomWords[i] % trendUris.length;
+            _setTokenURI(i, trendUris[idx]);
+        }
+
+        string memory trend = currentMarketTrend == MarketTrend.BULL ? "bullish" : "bearish";
+        emit TokensUpdated(trend);
+    }
+
+  
     // The following functions are overrides required by Solidity.
 
     function _beforeTokenTransfer(address from, address to, uint256 tokenId)

@@ -3,7 +3,7 @@ const main = async () => {
       const nftContractFactory = await hre.ethers.getContractFactory(
         "BearsBulls"
       );
-      const nftContract = await nftContractFactory.deploy(10);
+      const nftContract = await nftContractFactory.deploy(10, 7920);
       await nftContract.deployed();
   
       console.log("Contract deployed to:", nftContract.address);
